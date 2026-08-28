@@ -14,7 +14,7 @@ class PlanOut(BaseModel):
     """计划对象（列表项与后续单对象响应共用，任务 1.3 复用）。
 
     派生字段（决策 9/12）不在 DB 存储，由响应层计算：
-    - total_days：返回 − 出发的日历日差（同日往返 = 1，含首尾的单日下限）；
+    - total_days：返回 − 出发 + 1（含首尾，决策 9；同日往返 = 1）；
       任一日缺失为 null（草稿）。具体口径见属性注释。
     - generated_days：本次恒 0（DayPlan 数据在后续 FR-DY 变更才引入）。
     """
@@ -38,11 +38,9 @@ class PlanOut(BaseModel):
     def total_days(self) -> int | None:
         if self.depart_date is None or self.return_date is None:
             return None
-        # 口径：spec.md 计划对象示例「京都 2026-10-02~10-09 → total_days 7」与任务指令
-        # 「同日往返 → 1」一致——返回−出发的日历日差，至少 1 天。
-        # （design.md 决策 9 公式字面「返回−出发+1」对 10-02~10-09 得 8，与 spec 示例冲突，
-        # 按示例与任务指令取值，差异记录于 task-1.2-report.md。）
-        return max(1, (self.return_date - self.depart_date).days)
+        # 口径：design.md 决策 9「返回−出发+1」含首尾日历日（spec.md 示例
+        # 京都 2026-10-02~10-09 → 8）；同日往返 0+1=1；任一日缺失为 null。
+        return (self.return_date - self.depart_date).days + 1
 
     @computed_field  # type: ignore[prop-decorator]
     @property

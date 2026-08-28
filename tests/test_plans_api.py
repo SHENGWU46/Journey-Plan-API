@@ -195,7 +195,7 @@ def test_list_draft_plan_serialization(engine, client):
 
 
 def test_list_completed_plan_fields_and_total_days(engine, client):
-    """非草稿（completed=true）：完整字段序列化 + total_days 含首尾日历日（10-02~10-09 → 7）。"""
+    """非草稿（completed=true）：完整字段序列化 + total_days 含首尾日历日（10-02~10-09 → 8）。"""
     with Session(engine) as session:
         _add_plan(
             session,
@@ -216,7 +216,7 @@ def test_list_completed_plan_fields_and_total_days(engine, client):
     assert plan["return_date"] == "2026-10-09"
     assert plan["people_count"] == 2
     assert plan["total_budget"] == 17400
-    assert plan["total_days"] == 7  # 含首尾
+    assert plan["total_days"] == 8  # 返回-出发+1，含首尾
     assert plan["generated_days"] == 0  # 决策 12：恒 0
 
 
