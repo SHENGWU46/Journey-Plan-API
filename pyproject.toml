@@ -1,0 +1,8 @@
+[project]
+name = "journey-plan-api"
+version = "0.1.0"
+description = "JourneyPlan 后端 API（我的计划页）"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
