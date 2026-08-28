@@ -1,10 +1,12 @@
-"""计划列表查询 API 测试（任务 1.2）。
+"""计划接口 API 测试（任务 1.2 列表 / 任务 1.3 草稿创建、改名、删除）。
 
-运行方式：cd journey-plan-api && python -m pytest tests/test_plans_api.py -k list
-契约依据：changes/my-plans-page/specs/plan-api/spec.md「计划列表接口（GET /plans）」、
-design.md 决策 2（仅 completed 区分草稿/非草稿，无 status 参数与四态派生）、
-决策 3（keyword 服务端 LIKE 过滤）、决策 9（total_days 按「返回−出发+1」日历日派生，
-含首尾，日期缺失为 null）、决策 12（generated_days 恒 0）。
+运行方式：cd journey-plan-api && python -m pytest tests/test_plans_api.py
+契约依据：changes/my-plans-page/specs/plan-api/spec.md「计划列表接口（GET /plans）」
+「草稿创建接口（POST /plans）」「计划改名接口（PATCH /plans/{id}）」
+「计划删除接口（DELETE /plans/{id}）」、design.md 决策 2（仅 completed 区分
+草稿/非草稿）、决策 3（keyword 服务端 LIKE 过滤）、决策 9（total_days 按
+「返回−出发+1」日历日派生）、决策 11（开发期 CORS 放行本地来源）、
+决策 12（generated_days 恒 0）。
 
 测试通过 TestClient 走真实 HTTP 路由（依赖覆盖为每个测试独立的内存 SQLite）。
 """
@@ -277,3 +279,159 @@ def test_list_generated_days_always_zero(engine, client):
 
     items = client.get("/plans").json()["items"]
     assert all(p["generated_days"] == 0 for p in items)
+
+
+# ---------------------------------------------------------------- 任务 1.3：草稿创建
+
+
+def test_post_creates_draft_plan(client):
+    """POST /plans 合法创建（spec「合法创建」）：201 + 完整计划对象；
+    名称已去首尾空格，completed=false 草稿，关键字段 null、total_budget 0、
+    total_days null、generated_days 0，且列表立即可见。"""
+    resp = client.post("/plans", json={"name": "  成都美食探访  "})
+    assert resp.status_code == 201
+    plan = resp.json()
+
+    assert set(plan) == EXPECTED_PLAN_FIELDS
+    assert plan["name"] == "成都美食探访"  # 首尾空格已去除
+    assert plan["completed"] is False  # 草稿
+    assert plan["destination"] is None
+    assert plan["depart_date"] is None
+    assert plan["return_date"] is None
+    assert plan["people_count"] is None
+    assert plan["total_budget"] == 0
+    assert plan["total_days"] is None
+    assert plan["generated_days"] == 0
+    assert plan["user_id"] == 1
+    assert ISO_Z_RE.fullmatch(plan["created_at"])
+    assert ISO_Z_RE.fullmatch(plan["updated_at"])
+
+    # 列表立即可见（GET /plans 与创建结果同源）
+    items = client.get("/plans").json()["items"]
+    assert len(items) == 1 and items[0]["id"] == plan["id"]
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "",  # 空名称
+        "   ",  # 仅空格
+        "甲",  # 去空格后 1 字符
+        "a" * 21,  # 去空格后 21 字符
+        "  " + "a" * 21 + " ",  # 首尾空格不影响长度判定（去除后仍 21）
+    ],
+)
+def test_post_rejects_invalid_names_and_creates_nothing(client, bad_name):
+    """POST /plans 非法名称（spec「非法名称拒绝」）：422 且不创建任何数据。"""
+    resp = client.post("/plans", json={"name": bad_name})
+    assert resp.status_code == 422
+    assert client.get("/plans").json()["total"] == 0
+
+
+def test_post_accepts_name_length_boundaries(client):
+    """名称校验边界：去空格后恰好 2 字符与 20 字符均为合法（含首尾空格）。"""
+    resp2 = client.post("/plans", json={"name": "旅游"})
+    resp20 = client.post("/plans", json={"name": "  " + "a" * 20 + "  "})
+    assert resp2.status_code == 201
+    assert resp20.status_code == 201
+    assert resp2.json()["name"] == "旅游"
+    assert resp20.json()["name"] == "a" * 20
+
+
+# ---------------------------------------------------------------- 任务 1.3：改名
+
+
+def test_patch_renames_plan_and_bumps_updated_at(engine, client):
+    """PATCH /plans/{id} 合法改名（spec「合法改名」）：200、新名称生效、
+    updated_at 随之更新，列表查询立即可见新名称。"""
+    with Session(engine) as session:
+        plan = _add_plan(session, "旧名称", updated_at=datetime(2026, 8, 1, 9, 0, 0))
+        session.commit()
+        plan_id = plan.id
+
+    resp = client.patch(f"/plans/{plan_id}", json={"name": "新名称"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == plan_id
+    assert body["name"] == "新名称"
+    assert body["updated_at"] != "2026-08-01T09:00:00Z"  # updated_at 应随之变化
+    assert body["completed"] is False  # 其余字段不受改名影响
+
+    names = [p["name"] for p in client.get("/plans").json()["items"]]
+    assert names == ["新名称"]
+
+
+@pytest.mark.parametrize("bad_name", ["", "   ", "甲", "a" * 21])
+def test_patch_rejects_invalid_name_and_keeps_original(engine, client, bad_name):
+    """PATCH 非法名称（spec「非法名称拒绝」）：422 且原名称不变。"""
+    with Session(engine) as session:
+        _add_plan(session, "原名")
+        session.commit()
+
+    resp = client.patch("/plans/1", json={"name": bad_name})
+    assert resp.status_code == 422
+
+    items = client.get("/plans").json()["items"]
+    assert len(items) == 1 and items[0]["name"] == "原名"
+
+
+def test_patch_not_found_returns_404(client):
+    """PATCH 不存在的计划（spec「计划不存在」）：404。"""
+    resp = client.patch("/plans/999", json={"name": "新名称"})
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------- 任务 1.3：删除
+
+
+def test_delete_removes_plan_physically(engine, client):
+    """DELETE /plans/{id} 删除成功（spec「删除成功」）：204，物理删除，
+    随后 GET /plans 不再返回该计划且数据库中行已不存在。"""
+    with Session(engine) as session:
+        _add_plan(session, "待删除")
+        session.commit()
+
+    resp = client.delete("/plans/1")
+    assert resp.status_code == 204
+
+    body = client.get("/plans").json()
+    assert body["items"] == [] and body["total"] == 0
+
+    with Session(engine) as session:
+        assert session.get(Plan, 1) is None  # 物理删除（MVP 无回收站）
+
+
+def test_delete_not_found_returns_404(client):
+    """DELETE 不存在的计划（spec「计划不存在」）：404。"""
+    resp = client.delete("/plans/999")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------- 任务 1.3：开发 CORS（决策 11）
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:5173", "http://127.0.0.1:8080"])
+def test_cors_preflight_allows_local_dev_origins(client, origin):
+    """设计决策 11：开发期 CORS 放行 http://localhost:* 与 http://127.0.0.1:* 预检。"""
+    resp = client.options(
+        "/plans",
+        headers={"Origin": origin, "Access-Control-Request-Method": "POST"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == origin
+
+
+def test_cors_simple_request_carries_allow_origin(client):
+    """非预检请求（带 Origin）同样返回 Access-Control-Allow-Origin。"""
+    resp = client.get("/plans", headers={"Origin": "http://localhost:5173"})
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_cors_rejects_non_local_origin(client):
+    """非本地来源不放行：预检响应不带 Access-Control-Allow-Origin。"""
+    resp = client.options(
+        "/plans",
+        headers={"Origin": "https://evil.example.com", "Access-Control-Request-Method": "POST"},
+    )
+    assert resp.headers.get("access-control-allow-origin") is None

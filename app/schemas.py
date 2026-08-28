@@ -7,7 +7,7 @@ generated_days 恒 0）。
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, computed_field, field_serializer
+from pydantic import BaseModel, ConfigDict, computed_field, field_serializer, field_validator
 
 
 class PlanOut(BaseModel):
@@ -60,3 +60,30 @@ class PlanListOut(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class _PlanNameValidated(BaseModel):
+    """POST /plans 与 PATCH /plans/{id} 共用的名称请求体与校验（任务 1.3）。
+
+    契约（spec「草稿创建接口」/「计划改名接口」）：去除首尾空格后 2-20 字符；
+    非法名称由 Pydantic 在请求层拒绝（FastAPI 422），且校验通过后存储的是
+    已去空格名称（「名称已去空格」）。
+    """
+
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _strip_and_validate_name(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 2 or len(value) > 20:
+            raise ValueError("计划名称去除首尾空格后需为 2-20 个字符")
+        return value
+
+
+class PlanIn(_PlanNameValidated):
+    """POST /plans 请求体：仅计划名称。"""
+
+
+class PlanPatch(_PlanNameValidated):
+    """PATCH /plans/{id} 请求体：仅新名称。"""
