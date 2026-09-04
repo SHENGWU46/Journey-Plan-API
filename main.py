@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import plans
+from app.routers import auth_router, plans, user_router
+from app.routers.assistant import router as assistant_router
 
 app = FastAPI()
 
@@ -17,4 +18,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router.router)
 app.include_router(plans.router)
+app.include_router(user_router.router)
+app.include_router(assistant_router)
+
+# 数据库建表由 Alembic 迁移管理（alembic/versions/），不在应用启动时 create_all。
+# 首次运行：pip install alembic && alembic upgrade head
