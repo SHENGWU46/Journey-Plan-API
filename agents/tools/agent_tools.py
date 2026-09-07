@@ -51,32 +51,59 @@ def get_user_location(ip: str = "") -> str:
         return "未知城市"
 
 
-@tool(description="获取指定城市的实时天气信息，入参为城市名称（纯文本字符串，支持市/区/县名），返回天气现象、温度、湿度、风向风力、体感温度")
-def get_weather(city: str) -> str:
-    """通过高德地图天气API获取指定城市的实时天气"""
+@tool(description="获取指定城市的天气信息。入参 city（城市/区县名）与可选 date（YYYY-MM-DD，缺省为当天）；返回该日天气现象、温度区间、风向风力。注意：高德天气仅支持实况与未来 3-4 天预报，超出范围的 date 会明确提示暂不支持。")
+def get_weather(city: str, date: str = "") -> str:
+    """通过高德地图天气API获取指定城市的天气（默认当天，可指定未来日期）"""
     try:
         resp = requests.get(
             "https://restapi.amap.com/v3/weather/weatherInfo",
-            params={"city": city, "key": AMAP_KEY, "extensions": "base"},
+            params={"city": city, "key": AMAP_KEY, "extensions": "all"},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
 
-        if data.get("status") != "1" or not data.get("lives"):
+        if data.get("status") != "1" or not data.get("forecasts"):
             logger.warning(f"[天气工具] 高德天气接口返回异常：{data}")
             return f"未能查询到「{city}」的天气信息，请确认城市名称是否正确。"
 
-        live = data["lives"][0]
-        city_name = live["city"]
+        forecast = data["forecasts"][0]
+        casts = forecast.get("casts", [])
+        if not casts:
+            return f"未能查询到「{city}」的天气预报。"
+
+        # 目标日期：传入 date 则在预报数组中精确匹配，否则取当天（casts[0]）
+        target = None
+        if date and date.strip():
+            for cast in casts:
+                if cast.get("date") == date.strip():
+                    target = cast
+                    break
+            if target is None:
+                available = "、".join(c.get("date", "") for c in casts)
+                return (
+                    f"「{city}」在 {date} 暂无天气预报"
+                    f"（高德仅支持近几日预报，可查日期：{available}）。"
+                )
+        else:
+            target = casts[0]
+
+        day_weather = target.get("dayweather", "")
+        night_weather = target.get("nightweather", "")
+        day_temp = target.get("daytemp", "")
+        night_temp = target.get("nighttemp", "")
+        weather_desc = day_weather or night_weather
+        temp_desc = (
+            f"{night_temp}~{day_temp}°C" if day_temp and night_temp else (day_temp or night_temp)
+        )
         return (
-            f"城市：{live['province']}{city_name}\n"
-            f"天气：{live['weather']}\n"
-            f"温度：{live['temperature']}°C\n"
-            f"湿度：{live['humidity']}%\n"
-            f"风向：{live['winddirection']}\n"
-            f"风力：{live['windpower']}级\n"
-            f"更新时间：{live['reporttime']}\n"
+            f"城市：{forecast.get('province', '')}{forecast.get('city', '')}\n"
+            f"日期：{target.get('date', '')}\n"
+            f"天气：{weather_desc}\n"
+            f"温度：{temp_desc}\n"
+            f"白天风向：{target.get('daywind', '')}\n"
+            f"白天风力：{target.get('daypower', '')}级\n"
+            f"夜间天气：{night_weather}\n"
             f"提示：可指定具体区/县/村获取更精准的局部天气"
         )
     except Exception as e:

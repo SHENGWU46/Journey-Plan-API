@@ -55,7 +55,8 @@ async def get_session():
         yield session
 
 
-from .plan import Plan  # noqa: E402  模型模块必须在 Base 定义之后再导入
+from .day_plan import DayPlan  # noqa: E402  模型模块必须在 Base 定义之后再导入
+from .plan import Plan  # noqa: E402
 from .user import User  # noqa: E402
 
 __all__ = [
@@ -63,6 +64,7 @@ __all__ = [
     "AsyncSessionFactory",
     "AsyncSessionLocal",
     "Base",
+    "DayPlan",
     "Plan",
     "User",
     "engine",
