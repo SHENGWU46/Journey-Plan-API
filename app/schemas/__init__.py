@@ -17,7 +17,14 @@ from app.schemas.daily_plan import (
     DayPlanUpsertIn,
 )
 from app.schemas.plan import PlanIn, PlanListOut, PlanOut, PlanPatch
-from app.schemas.user import LoginIn, LoginOut, RegisterIn, UserOut
+from app.schemas.user import (
+    LoginIn,
+    LoginOut,
+    RefreshIn,
+    RefreshOut,
+    RegisterIn,
+    UserOut,
+)
 
 __all__ = [
     "Attraction",
@@ -32,6 +39,8 @@ __all__ = [
     "PlanListOut",
     "PlanOut",
     "PlanPatch",
+    "RefreshIn",
+    "RefreshOut",
     "RegisterIn",
     "UserOut",
 ]

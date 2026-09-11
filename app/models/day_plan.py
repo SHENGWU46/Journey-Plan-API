@@ -53,6 +53,7 @@ class DayPlan(Base):
     tour_time: Mapped[str | None] = mapped_column(String(50), nullable=True)
     daily_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
     attractions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    candidate_cards: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_generated: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(

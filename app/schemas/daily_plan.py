@@ -46,6 +46,10 @@ class DailyPlanGenReq(BaseModel):
     date: dt.date = Field(description="当日日期，必填")
     tour_time: str | None = Field(default=None, description="当日游玩时间段，如 09:00-18:00")
     daily_budget: int | None = Field(default=None, ge=0, description="当日预算（元）")
+    existing_attractions: list[str] | None = Field(
+        default=None,
+        description="已展示/已推荐的景点名列表；非空时本次生成将排除它们（用于「换一批/继续推荐」），不传则正常首生成",
+    )
 
     @field_validator("tour_time")
     @classmethod
@@ -77,6 +81,7 @@ class DayPlanUpsertIn(BaseModel):
     tour_time: str | None = None
     daily_budget: int | None = Field(default=None, ge=0)
     attractions: list[Attraction] | None = None
+    candidate_cards: list[Attraction] | None = None
 
 
 class DayPlanOut(BaseModel):
@@ -96,6 +101,7 @@ class DayPlanOut(BaseModel):
     tour_time: str | None
     daily_budget: int | None
     attractions: list[Attraction]
+    candidate_cards: list[Attraction] = Field(default_factory=list, description="候选景点池（含未入路线的卡片），JSON 文本存储")
     ai_generated: bool
     created_at: dt.datetime
     updated_at: dt.datetime
@@ -103,6 +109,18 @@ class DayPlanOut(BaseModel):
     @field_validator("attractions", mode="before")
     @classmethod
     def _parse_attractions(cls, value):
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (ValueError, TypeError):
+                return []
+        return value
+
+    @field_validator("candidate_cards", mode="before")
+    @classmethod
+    def _parse_candidate_cards(cls, value):
         if value is None or value == "":
             return []
         if isinstance(value, str):

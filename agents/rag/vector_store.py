@@ -5,6 +5,7 @@ from agents.model.factory import embed_model
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from agents.utils.path_tool import get_abs_path
 from agents.utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type, get_file_md5_hex
+from agents.rag.document_parser import parse_attraction_txt
 from agents.utils.logger_handler import logger
 import os
 
@@ -24,8 +25,23 @@ class VectorStoreService:
             length_function=len,
         )
 
-    def get_retriever(self):
-        return self.vector_store.as_retriever(search_kwargs={"k": chroma_conf["k"]})
+    def get_retriever(self, k: int | None = None, exclude: list[str] | None = None):
+        """返回检索器；k 不传则使用配置默认值 chroma_conf["k"]。
+
+        用于支持不同检索场景返回不同数量的分片（如首次宽泛检索返回更多、
+        查具体景点返回更少）。
+
+        exclude: 可选景点名列表；非空时通过 Chroma 元数据过滤排除这些景点，
+        用于「换一批 / 继续推荐」场景，避免重复返回已展示过的景点。
+        依赖分片 metadata 中的 attraction 字段（见 document_parser.py）。
+        """
+        k = k or chroma_conf["k"]
+        search_kwargs = {"k": k}
+        if exclude:
+            # 物理排除已展示景点：检索层直接过滤掉这些 attraction 的分片，
+            # 即使 LLM 想重复也拿不到对应材料，根治重复卡片。
+            search_kwargs["filter"] = {"attraction": {"$nin": exclude}}
+        return self.vector_store.as_retriever(search_kwargs=search_kwargs)
 
     def load_document(self):
         """
@@ -75,13 +91,26 @@ class VectorStoreService:
                 continue
 
             try:
-                documents: list[Document] = get_file_documents(path)
+                if path.endswith(".txt"):
+                    # 结构化解析：每景点一片（超长再按句细分）
+                    documents: list[Document] = parse_attraction_txt(
+                        path,
+                        max_chars=chroma_conf.get("max_attraction_chars", 512),
+                        sub_size=chroma_conf.get("sub_chunk_size", 200),
+                    )
+                    if not documents:
+                        logger.warning(f"[加载知识库]{path}未解析出景点，退回整文件切分")
+                        documents = get_file_documents(path)
+                        documents = self.spliter.split_documents(documents)
+                else:
+                    documents = get_file_documents(path)
+                    documents = self.spliter.split_documents(documents)
 
                 if not documents:
                     logger.warning(f"[加载知识库]{path}内没有有效文本内容，跳过")
                     continue
 
-                split_document: list[Document] = self.spliter.split_documents(documents)
+                split_document: list[Document] = documents
 
                 if not split_document:
                     logger.warning(f"[加载知识库]{path}分片后没有有效文本内容，跳过")

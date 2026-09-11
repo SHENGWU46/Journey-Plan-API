@@ -24,17 +24,24 @@ class RagSummarizeService(object):
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)
         self.model = chat_model
         self.chain = self._init_chain()
+        self.exclude: list[str] = []
 
     def _init_chain(self):
         chain = self.prompt_template | print_prompt | self.model | StrOutputParser()
         return chain
 
-    def retriever_docs(self, query: str) -> list[Document]:
-        return self.retriever.invoke(query)
+    def set_exclude(self, names: list[str] | None = None) -> None:
+        self.exclude = list(names) if names else []
 
-    def rag_summarize(self, query: str) -> str:
+    def retriever_docs(self, query: str, k: int | None = None, exclude: list[str] | None = None) -> list[Document]:
+        if exclude is None:
+            exclude = self.exclude
+        retriever = self.vector_store.get_retriever(k, exclude=exclude)
+        return retriever.invoke(query)
 
-        context_docs = self.retriever_docs(query)
+    def rag_summarize(self, query: str, top_k: int | None = None) -> str:
+
+        context_docs = self.retriever_docs(query, top_k)
 
         context = ""
         counter = 0

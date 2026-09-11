@@ -1,4 +1,4 @@
-"""开发演示数据脚本（任务 1.2，供前端手动验收）。
+"""开发演示数据脚本（异步版）。
 
 运行方式（journey-plan-api 目录）：
     python scripts/seed.py
@@ -8,8 +8,11 @@
 厦门文艺周末等），按任务 1.2 要求调整为：
 - 3 条非草稿（completed=true，含 destination/往返日期/人数/总预算，日期覆盖过去与未来）；
 - 1 条草稿（仅名称，completed=false，destination/日期/人数为 null、total_budget 0）。
+
+注意：因引擎已改为异步（aiosqlite / aiomysql），本脚本用 asyncio 驱动。
 """
 
+import asyncio
 import sys
 from datetime import date
 from pathlib import Path
@@ -21,8 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from app.database import Base, SessionLocal, engine  # noqa: E402
-from app.models import Plan  # noqa: E402
+from sqlalchemy import delete, select  # noqa: E402
+
+from app.models import AsyncSessionLocal, Base, Plan, engine  # noqa: E402
 
 DEMO_PLANS = [
     # 非草稿：未来行程
@@ -60,14 +64,17 @@ DEMO_PLANS = [
 ]
 
 
-def main() -> None:
-    Base.metadata.create_all(engine)  # 全新环境自动建表
-    with SessionLocal() as session:
+async def main() -> None:
+    # 全新环境自动建表（正式环境由 Alembic 迁移管理）
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with AsyncSessionLocal() as session:
         # 清空重建，保证幂等
-        deleted = session.query(Plan).delete()
+        deleted = (await session.execute(delete(Plan))).rowcount or 0
         session.add_all(Plan(**data) for data in DEMO_PLANS)
-        session.commit()
-        rows = session.query(Plan).order_by(Plan.id).all()
+        await session.commit()
+        rows = (await session.scalars(select(Plan).order_by(Plan.id))).all()
 
     print(f"已清空旧数据 {deleted} 条，写入 {len(rows)} 条演示计划：")
     for plan in rows:
@@ -77,9 +84,11 @@ def main() -> None:
             if plan.depart_date and plan.return_date
             else "无日期"
         )
-        print(f"  [{plan.id}] {plan.name} | {dates} | {plan.people_count}人 | "
-              f"预算 {plan.total_budget} | completed={plan.completed} {draft}")
+        print(
+            f"  [{plan.id}] {plan.name} | {dates} | {plan.people_count}人 | "
+            f"预算 {plan.total_budget} | completed={plan.completed} {draft}"
+        )
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

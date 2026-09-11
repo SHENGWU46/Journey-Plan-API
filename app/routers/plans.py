@@ -220,6 +220,9 @@ async def save_day_plan(
         fields["attractions"] = json.dumps(attractions, ensure_ascii=False)
         # 有景点即视为已推荐（驱动列表页角标），清空则回到未推荐
         fields["ai_generated"] = bool(attractions)
+    if "candidate_cards" in fields:
+        candidate_cards = fields["candidate_cards"] or []
+        fields["candidate_cards"] = json.dumps(candidate_cards, ensure_ascii=False)
 
     day = await DayPlanRepository(session).upsert(
         plan_id, day_index, payload.date, fields

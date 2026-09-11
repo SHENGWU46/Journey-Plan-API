@@ -67,11 +67,25 @@ class RegisterIn(_Credentials):
 
 
 class LoginOut(BaseModel):
-    """登录响应：access_token 供前端 Bearer 鉴权，user 供前端展示。"""
+    """登录响应：access_token 供前端 Bearer 鉴权，refresh_token 供后续无感续期，user 供前端展示。"""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = Field(default="bearer")
+    user: UserOut
+
+
+class RefreshIn(BaseModel):
+    """POST /auth/refresh 请求体：携带未过期的 refresh_token。"""
+
+    refresh_token: str
+
+
+class RefreshOut(BaseModel):
+    """POST /auth/refresh 响应：返回新的 access_token（refresh_token 长期有效，无需回传）。"""
 
     access_token: str
     token_type: str = Field(default="bearer")
-    user: UserOut
 
 
 class UserProfileUpdate(BaseModel):

@@ -111,8 +111,11 @@ _agent_lock = threading.Lock()  # 保护单例创建
 _run_lock = threading.Lock()  # 串行化 agent 执行，避免共享实例并发串扰
 
 
-def _build_messages(ctx: dict, req: DailyPlanGenReq) -> list[dict]:
-    """把注入的计划上下文与当日参数拼成一条 user 消息，交给 RecommendAgent。"""
+def _build_messages(ctx: dict, req: DailyPlanGenReq, existing_attractions: list[str] | None = None) -> list[dict]:
+    """把注入的计划上下文与当日参数拼成一条 user 消息，交给 RecommendAgent。
+
+    existing_attractions：本次要排除的已展示景点名（「换一批」语义）。
+    """
     destination = ctx.get("destination") or "未知"
     depart = ctx.get("depart_date") or "未知"
     ret = ctx.get("return_date") or "未知"
@@ -136,8 +139,15 @@ def _build_messages(ctx: dict, req: DailyPlanGenReq) -> list[dict]:
         f"- 日期：{req.date}\n"
         f"- 游玩时间段：{tour_time}\n"
         f"- 当日预算：{daily_budget}\n\n"
-        "请严格按系统提示词要求的 JSON 结构返回当日计划。"
     )
+    if existing_attractions:
+        names = "\n".join(f"- {n}" for n in existing_attractions)
+        user_content += (
+            f"【已推荐景点（本次务必避开，不要再次生成这些景点）】\n{names}\n"
+            f"请检索并推荐与以上不同的景点（可换不同区域 / 类型 / 小众景点），"
+            f"保证本次生成有新鲜内容。\n\n"
+        )
+    user_content += "请严格按系统提示词要求的 JSON 结构返回当日计划。"
     return [{"role": "user", "content": user_content}]
 
 
@@ -152,23 +162,20 @@ def _get_agent():
     return _agent_instance
 
 
-def _run_agent(agent, messages: list[dict]) -> str:
-    """在线程池内消费流式输出；取最后一个完整回答片段，避免 ReAct 中间态重复拼接。"""
+def _run_agent(agent, messages: list[dict], exclude: list[str] | None = None) -> str:
+    """在线程池内消费流式输出；取最后一个完整回答片段，避免 ReAct 中间态重复拼接。
+
+    exclude：本次检索要排除的已展示景点名（「换一批」语义）。
+    """
     last = ""
     with _run_lock:
-        for chunk in agent.execute_stream(messages):
+        for chunk in agent.execute_stream(messages, exclude=exclude):
             if chunk:
                 last = chunk
     return last
 
 
 def _fetch_weather(city: str, date: str = "") -> str:
-    """调用高德天气工具获取目的地指定日期的天气，解析为 '晴 26°C' 简写；失败返回空串。
-
-    由后端在 agent 返回后强制覆盖 weather 字段，保证天气是真实数据、
-    而非模型照抄提示词示例（如 '晴 26°C'）产生的「假数据」。
-    date 缺省时取当天；传入行程日期时按高德预报窗口（未来 3-4 天）匹配。
-    """
     try:
         from agents.tools.agent_tools import get_weather
 
@@ -176,24 +183,26 @@ def _fetch_weather(city: str, date: str = "") -> str:
         # 用 .func 取回被装饰的原函数，才能以普通 Python 函数方式传参调用。
         raw = get_weather.func(city, date)
         if not raw or "失败" in raw or "未能查询" in raw:
-            return ""
+            return "暂不满足查询条件，请手动填写"
         import re
 
         w = re.search(r"天气：([^\n]+)", raw)
         t = re.search(r"温度：([^\n]+)", raw)
         if w and t:
             return f"{w.group(1).strip()} {t.group(1).strip()}"
-        return ""
+        return "暂不满足查询条件，请手动填写"
     except Exception as e:  # noqa: BLE001
         logger.warning("[daily-plan] 获取天气失败：%s", e)
-        return ""
+        return "暂不满足查询条件，请手动填写"
 
 
-async def _call_agent(ctx: dict, req: DailyPlanGenReq) -> dict | str | None:
+async def _call_agent(ctx: dict, req: DailyPlanGenReq, existing_attractions: list[str] | None = None) -> dict | str | None:
     """【agent 接入点】调用 RecommendAgent 生成单日计划。
 
     返回 str（流式输出的 JSON 文本，由上层 _extract_json 解析）；
     加载/调用失败或返回空时返回 None，由 generate_daily_plan 降级为空结构。
+
+    existing_attractions：本次要排除的已展示景点名（「换一批」语义）。
     """
     try:
         agent = _get_agent()
@@ -201,10 +210,10 @@ async def _call_agent(ctx: dict, req: DailyPlanGenReq) -> dict | str | None:
         logger.warning("[daily-plan] 加载 RecommendAgent 失败，返回空结果：%s", e)
         return None
 
-    messages = _build_messages(ctx, req)
+    messages = _build_messages(ctx, req, existing_attractions)
     try:
         loop = asyncio.get_running_loop()
-        text = await loop.run_in_executor(None, _run_agent, agent, messages)
+        text = await loop.run_in_executor(None, _run_agent, agent, messages, existing_attractions)
     except Exception as e:  # noqa: BLE001
         logger.warning("[daily-plan] RecommendAgent 调用失败，返回空结果：%s", e)
         return None
@@ -219,7 +228,7 @@ async def generate_daily_plan(ctx: dict, req: DailyPlanGenReq) -> dict:
         agent 未返回 / 无有效景点 / 调用异常时，attractions=[]、weather=""。
     """
     try:
-        result = await _call_agent(ctx, req)
+        result = await _call_agent(ctx, req, getattr(req, "existing_attractions", None))
         if isinstance(result, str):
             result = _extract_json(result)
         if isinstance(result, dict):
@@ -228,11 +237,13 @@ async def generate_daily_plan(ctx: dict, req: DailyPlanGenReq) -> dict:
             if city:
                 try:
                     loop = asyncio.get_running_loop()
-                    real = await loop.run_in_executor(None, _fetch_weather, city, req.date)
-                    if real:
-                        plan["weather"] = real
+                    real = await loop.run_in_executor(None, _fetch_weather, city, req.date.isoformat())
+                    # 后端实拉取为唯一可信源：成功用真实值；失败（工具异常/无数据）返回
+                    # 「暂不满足查询条件，请手动填写」提示文案，由前端直接显示在天气输入框。
+                    plan["weather"] = real
                 except Exception as e:  # noqa: BLE001
-                    logger.warning("[daily-plan] 覆盖天气失败，保留 agent 返回值：%s", e)
+                    logger.warning("[daily-plan] 天气拉取异常，天气置为提示文案：%s", e)
+                    plan["weather"] = "暂不满足查询条件，请手动填写"
             return plan
         if result is not None:
             logger.warning("[daily-plan] agent 返回类型非 dict/str/None，按空结果处理")

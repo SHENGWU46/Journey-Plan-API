@@ -5,6 +5,10 @@ data_path: data
 md5_hex_store: md5.text
 allow_knowledge_file_type: ["txt", "pdf"]
 
-chunk_size: 200
-chunk_overlap: 20
+chunk_size: 350
+chunk_overlap: 50
+
+# 结构化分片：每景点独立成片，超过 max_attraction_chars 再按句细分
+max_attraction_chars: 512
+sub_chunk_size: 200
 separators: ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]

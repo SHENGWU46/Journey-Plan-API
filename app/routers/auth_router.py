@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthHandler
 from app.models import get_session
 from app.repository.user_repo import UserRepository
-from app.schemas import LoginIn, LoginOut, RegisterIn, UserOut
+from app.schemas import LoginIn, LoginOut, RefreshIn, RefreshOut, RegisterIn, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -52,5 +52,21 @@ async def login(
 
     tokens = auth_handler.encode_login_token(user.id)
     return LoginOut(
-        access_token=tokens["access_token"], user=UserOut.model_validate(user)
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        user=UserOut.model_validate(user),
     )
+
+
+@router.post("/refresh", response_model=RefreshOut)
+async def refresh(payload: RefreshIn) -> RefreshOut:
+    """用 refresh_token 换取新的 access_token（无感续期，避免 access 过期后被迫重新登录）。"""
+    try:
+        user_id = auth_handler.decode_refresh_token(payload.refresh_token)
+    except HTTPException:
+        # decode_refresh_token 对过期/无效统一抛 401，直接透传
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh Token不可用，请重新登录"
+        )
+    new_access = auth_handler.encode_update_token(user_id)
+    return RefreshOut(access_token=new_access["access_token"])
